@@ -2,22 +2,27 @@ package raspbootin;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.util.function.Consumer;
 
 import jssc.SerialPort;
 import jssc.SerialPortException;
+import raspbootin.gui.MainFrame;
 
 public class Raspbootin64Client {
 
-	void connectAndSend(String portName, String fileName) throws Exception {
-		SerialPort serialPort = new SerialPort(portName);
+	public static SerialPort connectAndSend(SerialPort serialPort, String fileName, Consumer<String> print) throws Exception {
 		try {
-			serialPort.openPort();// Open serial port
-			// Set params. Also you can set params by this string:
-			// serialPort.setParams(9600, 8, 1, 0);
-			serialPort.setParams(SerialPort.BAUDRATE_115200, SerialPort.DATABITS_8, SerialPort.STOPBITS_1,
-					SerialPort.PARITY_NONE);
-
-			System.out.println("Connecting to the Raspbootin...");
+			if (!serialPort.isOpened()) {
+				// Open serial port
+				serialPort.openPort();
+				// Set params. Also you can set params by this string:
+				// serialPort.setParams(9600, 8, 1, 0);
+				serialPort.setParams(SerialPort.BAUDRATE_115200, SerialPort.DATABITS_8, SerialPort.STOPBITS_1,
+						SerialPort.PARITY_NONE);
+			} else {
+				serialPort.removeEventListener();
+			}
+			print.accept("Connecting to the Raspbootin...");
 			// Read 8+3 bytes from the serial port (name + load_ready)
 			byte[] buffer;
 			String s = "";
@@ -30,10 +35,10 @@ public class Raspbootin64Client {
 			buffer = new byte[2];
 			// get two more 0x03 bytes
 			buffer = serialPort.readBytes(2);
-			System.out.println("Raspbootin ready: [" + s + "]");
+			print.accept("\nRaspbootin ready: [" + s + "]");
 
 			if (buffer[0] == 3 && buffer[1] == 3) {
-				System.out.println("Ready to send kernel file " + fileName);
+				print.accept("\nReady to send kernel file " + fileName);
 				// ready to send file
 				File f = new File(fileName);
 
@@ -51,7 +56,7 @@ public class Raspbootin64Client {
 
 					// Read 2 bytes from the serial port (file size acknowledge or error)
 					buffer = serialPort.readBytes(2);
-					System.out.println("Got the response from Raspbootin64: " + new String(buffer));
+					print.accept("\nGot the response from Raspbootin64: " + new String(buffer));
 
 					if (buffer[0] == 'O' && buffer[1] == 'K') {
 						// File length OK, proceed with upload.
@@ -65,31 +70,38 @@ public class Raspbootin64Client {
 							total += read;
 						}
 						in.close();
-						System.out.println(
-								"Sent " + total + " bytes, which must be the same as the file size: " + f.length());
+						print.accept(
+								"\nSent " + total + " bytes.\n");
+						Thread.sleep(50);
+						int bytesLeft = serialPort.getInputBufferBytesCount(); 
+						if(bytesLeft > 0) {
+							buffer = serialPort.readBytes(bytesLeft);
+							print.accept(new String(buffer));
+						}
 					} else {
-						System.err.println("File size error from server: [" + new String(buffer) + "]");
+						print.accept("\nFile size error from server: [" + new String(buffer) + "]");
 					}
 				} else {
-					System.err.println("File " + fileName + " does not exist, or is a folder!");
+					print.accept("\nFile " + fileName + " does not exist, or is a folder!");
 				}
 			} else {
-				System.err.println("Got wrong bytes from Raspbootin64: [" + new String(buffer) + "]");
+				print.accept("\nGot wrong bytes from Raspbootin64: [" + new String(buffer) + "]");
 			}
-
-			serialPort.closePort();// Close serial port
 		} catch (SerialPortException ex) {
 			System.out.println(ex);
 		}
+		return serialPort;
 	}
 
 	public static void main(String[] args) {
 		try {
-			if (args.length == 2)
-				(new Raspbootin64Client()).connectAndSend(args[0], args[1]);
-			else {
+			if (args.length == 2) {
+				Raspbootin64Client.connectAndSend(new SerialPort(args[0]), args[1], toPrint -> System.out.print(toPrint)).closePort();
+			} else if (args.length == 0 || args.length > 2) {
 				System.err.println("Usage: java Raspbootin64Client <com_port> <file_path>");
 				System.err.println("Example: java Raspbootin64Client COM3 C:\\Temp\\kernel8.img");
+			} else if (args.length == 1 && args[0].equalsIgnoreCase("gui")) {
+				new MainFrame();
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
